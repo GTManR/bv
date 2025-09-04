@@ -53,7 +53,9 @@ jobs:
       run: |
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore.jks
         
-    - name: Create signing.properties
+    - name: Decode keystore
+      run: |
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore.jks
       run: |
         cat > signing.properties << EOF
         keystore.path=app/keystore.jks
@@ -165,8 +167,6 @@ jobs:
         body: |
           ## 🚀 BV Mobile 
           
-          > ⚠️ **重要提醒**: 此版本已移除地区使用限制，仅供技术研究和学习交流使用
-          
           ### 📱 应用详细信息
           
           | 属性 | 值 |
@@ -184,40 +184,11 @@ jobs:
           | **提交哈希** | [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
           
           
-          ### 🛠️ Build Flavor 说明
-          
-          ${{ steps.build_config.outputs.flavor == 'default' && '**Default版本**: 完整功能版本，包含所有特性' || '**Lite版本**: 轻量版本，移除了部分组件以减小体积' }}
-          
-          ### 📥 安装使用指南
-          
-          #### 1️⃣ 下载APK
-          点击下方 **Assets** 中的 `${{ steps.find_apk.outputs.apk_name }}` 下载安装包
-          
-          #### 2️⃣ 允许未知来源
-          - 打开 **设置** → **安全** → **未知来源**
-          - 或在安装时选择"允许来自此来源的应用"
-          
-          #### 3️⃣ 安装应用
-          - 打开下载的APK文件
-          - 按照提示完成安装
-          
-          #### 4️⃣ 开始使用
-          - 安装完成后即可正常使用
-          - 无需额外配置，所有功能开箱即用
-          
-          ### ⚠️ 重要声明
-          
-          - 📚 **学习研究**: 此修改版本仅用于技术学习和研究目的
-          - ⚖️ **法律合规**: 请确保使用时遵守当地相关法律法规
-          - 🔒 **安全风险**: 非官方应用存在潜在风险，请自行评估后使用
-          - 🚫 **商业禁用**: 严禁将此版本用于任何商业用途
-          - 💡 **技术交流**: 如有技术问题，欢迎在Issues中讨论
-        
-          
           ### 🏷️ 其他版本
           
           - **完整版** (default): 包含完整功能
           - **精简版** (lite): 体积更小，适合存储空间有限的设备
+
         draft: false
         prerelease: false
         
@@ -232,7 +203,7 @@ jobs:
         asset_content_type: application/vnd.android.package-archive
         
     - name: Upload APK as artifact (备份存储)
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
         name: BV-Mobile-${{ steps.build_config.outputs.flavor }}-${{ steps.find_apk.outputs.build_type }}-${{ steps.apk_info.outputs.version_name || github.run_number }}
         path: ${{ steps.find_apk.outputs.apk_path }}
@@ -248,24 +219,13 @@ jobs:
     - name: Build Summary
       if: success()
       run: |
-        echo "## 🎉 构建成功完成！" >> $GITHUB_STEP_SUMMARY
+        echo "## 🎉 构建成功！" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 📦 构建信息" >> $GITHUB_STEP_SUMMARY
-        echo "| 属性 | 值 |" >> $GITHUB_STEP_SUMMARY
-        echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
-        echo "| **APK文件** | \`${{ steps.find_apk.outputs.apk_name }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **原始名称** | \`${{ steps.find_apk.outputs.original_name }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **应用版本** | ${{ steps.apk_info.outputs.version_name }} (${{ steps.apk_info.outputs.version_code }}) |" >> $GITHUB_STEP_SUMMARY
-        echo "| **构建变体** | ${{ steps.build_config.outputs.flavor }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| **构建类型** | ${{ steps.find_apk.outputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| **文件大小** | ${{ steps.apk_info.outputs.size_mb }} MB |" >> $GITHUB_STEP_SUMMARY
-        echo "| **支持版本** | Android ${{ steps.apk_info.outputs.min_sdk }}+ |" >> $GITHUB_STEP_SUMMARY
+        echo "- **APK文件**: \`${{ steps.find_apk.outputs.apk_name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **应用版本**: ${{ steps.apk_info.outputs.version_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **构建变体**: ${{ steps.build_config.outputs.flavor }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **文件大小**: ${{ steps.apk_info.outputs.size_mb }} MB" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### 🚀 发布状态" >> $GITHUB_STEP_SUMMARY
         echo "✅ APK 已成功上传到 [Releases 页面](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
-        echo "✅ 备份文件已保存到 Actions Artifacts (保留90天)" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📝 下一步" >> $GITHUB_STEP_SUMMARY
-        echo "1. 前往 [Releases](https://github.com/${{ github.repository }}/releases) 页面查看发布" >> $GITHUB_STEP_SUMMARY
-        echo "2. 下载并测试APK文件" >> $GITHUB_STEP_SUMMARY
-        echo "3. 如有问题请在 [Issues](https://github.com/${{ github.repository }}/issues) 中反馈" >> $GITHUB_STEP_SUMMARY
