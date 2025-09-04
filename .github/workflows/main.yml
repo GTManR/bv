@@ -37,7 +37,7 @@ jobs:
       uses: android-actions/setup-android@v3
       
     - name: Cache Gradle packages
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.gradle/caches
@@ -212,12 +212,12 @@ jobs:
           - 🔒 **安全风险**: 非官方应用存在潜在风险，请自行评估后使用
           - 🚫 **商业禁用**: 严禁将此版本用于任何商业用途
           - 💡 **技术交流**: 如有技术问题，欢迎在Issues中讨论
+        
           
           ### 🏷️ 其他版本
           
           - **完整版** (default): 包含完整功能
           - **精简版** (lite): 体积更小，适合存储空间有限的设备
-          
         draft: false
         prerelease: false
         
