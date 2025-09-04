@@ -49,14 +49,10 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
       
-    - name: Decode keystore
+    - name: Decode keystore and create signing properties
       run: |
         echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore.jks
         
-    - name: Decode keystore
-      run: |
-        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore.jks
-      run: |
         cat > signing.properties << EOF
         keystore.path=app/keystore.jks
         keystore.pwd=${{ secrets.KEYSTORE_PASSWORD }}
@@ -120,8 +116,6 @@ jobs:
           exit 1
         fi
         
-        echo "✅ Found APK: ${{ steps.find_apk.outputs.original_name }}"
-        echo "📦 Will rename to: ${{ steps.find_apk.outputs.apk_name }}"
         
     - name: Get APK info
       id: apk_info
