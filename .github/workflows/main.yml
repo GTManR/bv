@@ -1,0 +1,271 @@
+name: Build and Release BV Mobile APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag name'
+        required: true
+        default: 'v1.0.0'
+      build_flavor:
+        description: 'Build flavor'
+        required: true
+        default: 'default'
+        type: choice
+        options:
+          - default
+          - lite
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      
+    - name: Cache Gradle packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/**/*.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+          
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+      
+    - name: Decode keystore
+      run: |
+        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore.jks
+        
+    - name: Create signing.properties
+      run: |
+        cat > signing.properties << EOF
+        keystore.path=app/keystore.jks
+        keystore.pwd=${{ secrets.KEYSTORE_PASSWORD }}
+        keystore.alias=${{ secrets.KEY_ALIAS }}
+        keystore.alias_pwd=${{ secrets.KEY_PASSWORD }}
+        EOF
+        
+    - name: Set build flavor
+      id: build_config
+      run: |
+        FLAVOR="${{ github.event.inputs.build_flavor || 'default' }}"
+        echo "flavor=$FLAVOR" >> $GITHUB_OUTPUT
+        echo "🎯 Building flavor: $FLAVOR"
+        
+    - name: Build Release APK
+      run: ./gradlew :app:assemble${{ steps.build_config.outputs.flavor }}Release
+      env:
+        GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g"
+        
+    - name: Build Debug APK (fallback)
+      if: failure()
+      run: ./gradlew :app:assemble${{ steps.build_config.outputs.flavor }}Debug
+      
+    - name: Find APK files
+      id: find_apk
+      run: |
+        echo "🔍 Searching for APK files..."
+        find . -name "*.apk" -type f | head -10
+        
+        # 根据项目的自定义命名规则查找APK
+        RELEASE_APK=$(find . -name "*.apk" -path "*/outputs/apk/${{ steps.build_config.outputs.flavor }}/release/*" | head -1)
+        DEBUG_APK=$(find . -name "*.apk" -path "*/outputs/apk/${{ steps.build_config.outputs.flavor }}/debug/*" | head -1)
+        
+        # 如果没找到，尝试通用路径
+        if [ -z "$RELEASE_APK" ]; then
+          RELEASE_APK=$(find . -name "*release*.apk" -type f | head -1)
+        fi
+        
+        if [ -z "$DEBUG_APK" ]; then
+          DEBUG_APK=$(find . -name "*debug*.apk" -type f | head -1)
+        fi
+        
+        if [ -n "$RELEASE_APK" ]; then
+          echo "apk_path=$RELEASE_APK" >> $GITHUB_OUTPUT
+          ORIGINAL_NAME=$(basename "$RELEASE_APK")
+          # 创建更友好的文件名
+          NEW_NAME="BV-Mobile-${{ steps.build_config.outputs.flavor }}-$(date +%Y%m%d)-release.apk"
+          echo "apk_name=$NEW_NAME" >> $GITHUB_OUTPUT
+          echo "original_name=$ORIGINAL_NAME" >> $GITHUB_OUTPUT
+          echo "build_type=release" >> $GITHUB_OUTPUT
+        elif [ -n "$DEBUG_APK" ]; then
+          echo "apk_path=$DEBUG_APK" >> $GITHUB_OUTPUT
+          ORIGINAL_NAME=$(basename "$DEBUG_APK")
+          NEW_NAME="BV-Mobile-${{ steps.build_config.outputs.flavor }}-$(date +%Y%m%d)-debug.apk"
+          echo "apk_name=$NEW_NAME" >> $GITHUB_OUTPUT
+          echo "original_name=$ORIGINAL_NAME" >> $GITHUB_OUTPUT
+          echo "build_type=debug" >> $GITHUB_OUTPUT
+        else
+          echo "❌ No APK found! Available files:"
+          find . -name "*.apk" -type f || echo "No APK files found at all"
+          exit 1
+        fi
+        
+        echo "✅ Found APK: ${{ steps.find_apk.outputs.original_name }}"
+        echo "📦 Will rename to: ${{ steps.find_apk.outputs.apk_name }}"
+        
+    - name: Get APK info
+      id: apk_info
+      run: |
+        APK_PATH="${{ steps.find_apk.outputs.apk_path }}"
+        APK_SIZE=$(stat -c%s "$APK_PATH")
+        APK_SIZE_MB=$((APK_SIZE / 1024 / 1024))
+        echo "size_bytes=$APK_SIZE" >> $GITHUB_OUTPUT
+        echo "size_mb=$APK_SIZE_MB" >> $GITHUB_OUTPUT
+        
+        # 安装 aapt 工具
+        sudo apt-get update -qq && sudo apt-get install -y -qq aapt > /dev/null
+        
+        # 获取版本信息
+        VERSION_NAME=$(aapt dump badging "$APK_PATH" | grep "versionName" | sed "s/.*versionName='\([^']*\)'.*/\1/" || echo "unknown")
+        VERSION_CODE=$(aapt dump badging "$APK_PATH" | grep "versionCode" | sed "s/.*versionCode='\([^']*\)'.*/\1/" || echo "unknown")
+        PACKAGE_NAME=$(aapt dump badging "$APK_PATH" | grep "package:" | sed "s/.*package: name='\([^']*\)'.*/\1/" || echo "unknown")
+        MIN_SDK=$(aapt dump badging "$APK_PATH" | grep "sdkVersion" | sed "s/.*sdkVersion:'\([^']*\)'.*/\1/" || echo "unknown")
+        TARGET_SDK=$(aapt dump badging "$APK_PATH" | grep "targetSdkVersion" | sed "s/.*targetSdkVersion:'\([^']*\)'.*/\1/" || echo "unknown")
+        
+        echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+        echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+        echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+        echo "min_sdk=$MIN_SDK" >> $GITHUB_OUTPUT
+        echo "target_sdk=$TARGET_SDK" >> $GITHUB_OUTPUT
+        
+        echo "📱 APK详细信息:"
+        echo "  - 包名: $PACKAGE_NAME"
+        echo "  - 版本: $VERSION_NAME ($VERSION_CODE)"
+        echo "  - SDK: $MIN_SDK - $TARGET_SDK"
+        echo "  - 大小: $APK_SIZE_MB MB"
+        echo "  - 变体: ${{ steps.build_config.outputs.flavor }}"
+        echo "  - 类型: ${{ steps.find_apk.outputs.build_type }}"
+        
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+        release_name: "🎉 BV Mobile ${{ steps.apk_info.outputs.version_name }} (${{ steps.build_config.outputs.flavor }}) - 绕过区域限制版"
+        body: |
+          ## 🚀 BV Mobile 
+          
+          > ⚠️ **重要提醒**: 此版本已移除地区使用限制，仅供技术研究和学习交流使用
+          
+          ### 📱 应用详细信息
+          
+          | 属性 | 值 |
+          |------|-----|
+          | **应用名称** | BV Mobile |
+          | **版本名称** | `${{ steps.apk_info.outputs.version_name }}` |
+          | **版本代码** | `${{ steps.apk_info.outputs.version_code }}` |
+          | **包名** | `${{ steps.apk_info.outputs.package_name }}` |
+          | **构建变体** | `${{ steps.build_config.outputs.flavor }}` |
+          | **构建类型** | `${{ steps.find_apk.outputs.build_type }}` |
+          | **文件大小** | `${{ steps.apk_info.outputs.size_mb }} MB` |
+          | **支持SDK** | `API ${{ steps.apk_info.outputs.min_sdk }}+` (目标: `API ${{ steps.apk_info.outputs.target_sdk }}`) |
+          | **原始文件名** | `${{ steps.find_apk.outputs.original_name }}` |
+          | **构建时间** | `$(date -u '+%Y-%m-%d %H:%M:%S UTC')` |
+          | **提交哈希** | [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |
+          
+          
+          ### 🛠️ Build Flavor 说明
+          
+          ${{ steps.build_config.outputs.flavor == 'default' && '**Default版本**: 完整功能版本，包含所有特性' || '**Lite版本**: 轻量版本，移除了部分组件以减小体积' }}
+          
+          ### 📥 安装使用指南
+          
+          #### 1️⃣ 下载APK
+          点击下方 **Assets** 中的 `${{ steps.find_apk.outputs.apk_name }}` 下载安装包
+          
+          #### 2️⃣ 允许未知来源
+          - 打开 **设置** → **安全** → **未知来源**
+          - 或在安装时选择"允许来自此来源的应用"
+          
+          #### 3️⃣ 安装应用
+          - 打开下载的APK文件
+          - 按照提示完成安装
+          
+          #### 4️⃣ 开始使用
+          - 安装完成后即可正常使用
+          - 无需额外配置，所有功能开箱即用
+          
+          ### ⚠️ 重要声明
+          
+          - 📚 **学习研究**: 此修改版本仅用于技术学习和研究目的
+          - ⚖️ **法律合规**: 请确保使用时遵守当地相关法律法规
+          - 🔒 **安全风险**: 非官方应用存在潜在风险，请自行评估后使用
+          - 🚫 **商业禁用**: 严禁将此版本用于任何商业用途
+          - 💡 **技术交流**: 如有技术问题，欢迎在Issues中讨论
+          
+          ### 🏷️ 其他版本
+          
+          - **完整版** (default): 包含完整功能
+          - **精简版** (lite): 体积更小，适合存储空间有限的设备
+          
+        draft: false
+        prerelease: false
+        
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ${{ steps.find_apk.outputs.apk_path }}
+        asset_name: ${{ steps.find_apk.outputs.apk_name }}
+        asset_content_type: application/vnd.android.package-archive
+        
+    - name: Upload APK as artifact (备份存储)
+      uses: actions/upload-artifact@v3
+      with:
+        name: BV-Mobile-${{ steps.build_config.outputs.flavor }}-${{ steps.find_apk.outputs.build_type }}-${{ steps.apk_info.outputs.version_name || github.run_number }}
+        path: ${{ steps.find_apk.outputs.apk_path }}
+        retention-days: 90
+        
+    - name: Clean up sensitive files
+      if: always()
+      run: |
+        rm -f app/keystore.jks
+        rm -f signing.properties
+        echo "🧹 已清理敏感文件"
+        
+    - name: Build Summary
+      if: success()
+      run: |
+        echo "## 🎉 构建成功完成！" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 构建信息" >> $GITHUB_STEP_SUMMARY
+        echo "| 属性 | 值 |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+        echo "| **APK文件** | \`${{ steps.find_apk.outputs.apk_name }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **原始名称** | \`${{ steps.find_apk.outputs.original_name }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **应用版本** | ${{ steps.apk_info.outputs.version_name }} (${{ steps.apk_info.outputs.version_code }}) |" >> $GITHUB_STEP_SUMMARY
+        echo "| **构建变体** | ${{ steps.build_config.outputs.flavor }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **构建类型** | ${{ steps.find_apk.outputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **文件大小** | ${{ steps.apk_info.outputs.size_mb }} MB |" >> $GITHUB_STEP_SUMMARY
+        echo "| **支持版本** | Android ${{ steps.apk_info.outputs.min_sdk }}+ |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 发布状态" >> $GITHUB_STEP_SUMMARY
+        echo "✅ APK 已成功上传到 [Releases 页面](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
+        echo "✅ 备份文件已保存到 Actions Artifacts (保留90天)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📝 下一步" >> $GITHUB_STEP_SUMMARY
+        echo "1. 前往 [Releases](https://github.com/${{ github.repository }}/releases) 页面查看发布" >> $GITHUB_STEP_SUMMARY
+        echo "2. 下载并测试APK文件" >> $GITHUB_STEP_SUMMARY
+        echo "3. 如有问题请在 [Issues](https://github.com/${{ github.repository }}/issues) 中反馈" >> $GITHUB_STEP_SUMMARY
